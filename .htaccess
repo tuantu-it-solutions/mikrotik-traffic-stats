@@ -1,0 +1,32 @@
+# Net Traffic — cấu hình Apache / LiteSpeed (shared hosting)
+
+Options -Indexes
+DirectoryIndex index.php
+
+# Chặn truy cập trực tiếp các file nhạy cảm (CSDL, tài liệu, script mẫu...)
+<FilesMatch "\.(sqlite|sqlite3|db|db-journal|sqlite-journal|sqlite-wal|sqlite-shm|bak|log|md|rsc|ini|sh|dist)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# Nén gzip giúp trang tải nhanh hơn
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/css text/csv application/javascript application/json image/svg+xml
+</IfModule>
+
+# CSS/JS/icon có kèm ?v=phiên-bản nên cho trình duyệt cache lâu
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/css "access plus 30 days"
+  ExpiresByType application/javascript "access plus 30 days"
+  ExpiresByType image/svg+xml "access plus 30 days"
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+</IfModule>

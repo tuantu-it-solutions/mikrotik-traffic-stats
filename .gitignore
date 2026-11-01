@@ -1,0 +1,12 @@
+# Dữ liệu SQLite sinh ra khi chạy
+/data/*.sqlite
+/data/*.sqlite-journal
+/data/*.sqlite-wal
+/data/*.sqlite-shm
+/data/*.db
+
+# Hệ điều hành / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
