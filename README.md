@@ -164,6 +164,10 @@ location ~* \.(sqlite|sqlite3|db|md|rsc)$ { deny all; }
 
 ## Câu hỏi thường gặp
 
+**Lỗi 500 ngay khi mở trang?** Một số hosting không cho dùng `Options` trong `.htaccess` —
+xóa dòng `Options -Indexes` ở file `.htaccess` gốc. Nếu trang báo không ghi được dữ liệu,
+kiểm tra quyền ghi của thư mục `data/`.
+
 **Số liệu hơi khác Winbox?** Winbox dùng 1 KB = 1024 byte; nhà mạng thường dùng 1000.
 Chọn đơn vị trong *Quản trị › Cài đặt chung*. Tốc độ luôn tính theo bit/giây (1 Mbps = 1.000.000 bit/s).
 

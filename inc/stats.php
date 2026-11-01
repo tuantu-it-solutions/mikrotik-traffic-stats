@@ -129,18 +129,20 @@ function speed_series(PDO $db, int $from, int $to, int $maxPoints = 300): array
 
     $rows = db_all(
         $db,
-        'SELECT (ts / :b) * :b AS t, SUM(rx) AS rx, SUM(tx) AS tx, SUM(dur) AS dur
+        'SELECT (ts / :b) * :b AS t, SUM(rx) AS rx, SUM(tx) AS tx, SUM(dur) AS dur, MIN(dur) AS mind
            FROM samples WHERE ts >= :f AND ts < :t AND dur > 0
           GROUP BY t ORDER BY t',
         [':b' => $bucket, ':f' => $from, ':t' => $to]
     );
 
-    $gap = max(2.5 * $bucket, 2.5 * $typical);
     $points = [];
     $prev = null;
     foreach ($rows as $r) {
         $t = (int) $r['t'];
         $dur = max(1, (int) $r['dur']);
+        // Coi là "mất tín hiệu" khi 2 điểm cách nhau xa hơn nhiều so với chu kỳ gửi
+        // (tính cả chu kỳ của chính mẫu đó, phòng khi router từng đổi chu kỳ).
+        $gap = max(2.5 * $bucket, 2.5 * $typical, 1.5 * (int) $r['mind']);
         if ($prev !== null && ($t - $prev) > $gap) {
             $points[] = [$prev + $bucket, null, null]; // khoảng trống: router không gửi dữ liệu
         }
