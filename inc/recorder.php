@@ -67,23 +67,47 @@ function record_rollback(PDO $db): void
     }
 }
 
+/** Chu kỳ gửi thường gặp của router: trung vị 25 mẫu gần nhất (giây). */
+function recent_interval(PDO $db): int
+{
+    $durs = array_map('intval', array_column(
+        db_all($db, 'SELECT dur FROM samples WHERE dur > 0 ORDER BY id DESC LIMIT 25'),
+        'dur'
+    ));
+    if (!$durs) {
+        return 60;
+    }
+    sort($durs);
+    return max(5, min(3600, $durs[intdiv(count($durs), 2)]));
+}
+
 /**
  * Ghi một mẫu. Phải được gọi bên trong transaction.
- * @return array{rx:int, tx:int, dur:int}
+ *
+ * $cover    Số giây mà lượng byte này thực sự phát sinh, tính ngược từ lúc nhận.
+ *           null = cả khoảng kể từ mẫu trước. Dùng khi router vừa chạy lại sau
+ *           một thời gian tắt: byte chỉ phát sinh sau lúc bật lại, không được trải
+ *           đều lên những giờ router đang tắt.
+ * $ratePeak false = tốc độ của mẫu chỉ là ước lượng, không tính vào tốc độ đỉnh.
+ * @return array{rx:int, tx:int, dur:int, gap:int}
  */
-function record_sample_tx(PDO $db, int $rx, int $tx, int $now, array $meta = []): array
+function record_sample_tx(PDO $db, int $rx, int $tx, int $now, array $meta = [], ?int $cover = null, bool $ratePeak = true): array
 {
     $rx = max(0, $rx);
     $tx = max(0, $tx);
 
     $lastTs = (int) meta_get($db, 'last_ts', '0');
-    $dur = ($lastTs > 0 && $now > $lastTs) ? $now - $lastTs : 0;
+    $gap = ($lastTs > 0 && $now > $lastTs) ? $now - $lastTs : 0;
+    $dur = $gap;
+    if ($cover !== null && $gap > 0) {
+        $dur = max(1, min($gap, $cover));
+    }
 
     $db->prepare('INSERT INTO samples (ts, rx, tx, dur) VALUES (?, ?, ?, ?)')
         ->execute([$now, $rx, $tx, $dur]);
 
-    $rateRx = $dur >= RATE_MIN_DUR ? $rx / $dur : 0.0;
-    $rateTx = $dur >= RATE_MIN_DUR ? $tx / $dur : 0.0;
+    $rateRx = $ratePeak && $dur >= RATE_MIN_DUR ? $rx / $dur : 0.0;
+    $rateTx = $ratePeak && $dur >= RATE_MIN_DUR ? $tx / $dur : 0.0;
 
     $arrivalHour = local_hour_start($now);
     $alloc = allocate_hours($rx, $tx, $now, $dur);
@@ -123,7 +147,7 @@ function record_sample_tx(PDO $db, int $rx, int $tx, int $now, array $meta = [])
         meta_set($db, $k, (string) $v);
     }
 
-    return ['rx' => $rx, 'tx' => $tx, 'dur' => $dur];
+    return ['rx' => $rx, 'tx' => $tx, 'dur' => $dur, 'gap' => $gap];
 }
 
 /** Chế độ cũ: router gửi lượng byte chênh lệch (rx, tx). */
@@ -142,29 +166,52 @@ function record_sample(PDO $db, int $rx, int $tx, int $now, array $meta = []): a
 
 /**
  * Chế độ bộ đếm: router gửi thẳng rx-byte/tx-byte của interface,
- * server tự tính chênh lệch. Gửi trùng hay gửi lỗi đều không làm sai số liệu;
- * khi bộ đếm bị reset (router khởi động lại, PPPoE quay số lại) thì lấy luôn
- * giá trị hiện tại làm lượng phát sinh.
+ * server tự tính chênh lệch. Gửi trùng hay gửi lỗi đều không làm sai số liệu.
+ *
+ * Khi bộ đếm chạy lại từ 0 (router khởi động lại, PPPoE quay số lại), giá trị
+ * hiện tại chính là lượng phát sinh từ lúc đó. Lượng này chỉ có sau khi router
+ * chạy lại nên được ghi vào khoảng ngay trước lần gửi này:
+ *  - router gửi kèm uptime (&up=...): biết chính xác lúc khởi động;
+ *  - không có uptime: ước lượng 2 chu kỳ gửi (tối thiểu 2 phút) — lần gửi đầu
+ *    tiên thành công thường chỉ vài chục giây tới 1–2 phút sau khi có mạng.
+ * Phần phát sinh từ lần gửi cuối tới lúc router tắt (tối đa 1 chu kỳ) không thể
+ * biết được vì bộ đếm đã mất khi tắt.
  */
-function record_counters(PDO $db, int $rxc, int $txc, int $now, array $meta = []): array
+function record_counters(PDO $db, int $rxc, int $txc, int $now, array $meta = [], ?int $uptime = null): array
 {
     record_begin($db);
     try {
-        $last = meta_get_many($db, ['last_rxc', 'last_txc']);
+        $last = meta_get_many($db, ['last_rxc', 'last_txc', 'last_ts']);
+        $lastTs = (int) $last['last_ts'];
+        $gap = ($lastTs > 0 && $now > $lastTs) ? $now - $lastTs : 0;
+        // Router mới chạy được ít hơn thời gian kể từ lần gửi trước => đã khởi động lại.
+        $rebooted = $uptime !== null && $gap > 0 && $uptime + 5 < $gap;
         $rx = 0;
         $tx = 0;
+        $cover = null;
+        $ratePeak = true;
         if ($last['last_rxc'] !== null && $last['last_txc'] !== null) {
             $lastRx = (int) $last['last_rxc'];
             $lastTx = (int) $last['last_txc'];
-            $rx = $rxc >= $lastRx ? $rxc - $lastRx : $rxc;
-            $tx = $txc >= $lastTx ? $txc - $lastTx : $txc;
-            if ($rxc < $lastRx || $txc < $lastTx) {
+            $resetRx = $rebooted || $rxc < $lastRx;
+            $resetTx = $rebooted || $txc < $lastTx;
+            $rx = $resetRx ? $rxc : $rxc - $lastRx;
+            $tx = $resetTx ? $txc : $txc - $lastTx;
+            if ($resetRx || $resetTx) {
+                if ($rebooted) {
+                    $cover = max(1, $uptime);
+                } else {
+                    $cover = max(120, 2 * recent_interval($db));
+                    $ratePeak = false;
+                }
                 $meta['counter_reset_ts'] = (string) $now;
+                $meta['last_restart'] = (string) json_encode(['ts' => $now, 'gap' => $gap, 'reboot' => $rebooted]);
             }
         }
+        $meta['last_uptime'] = $uptime !== null ? (string) $uptime : '';
         $meta['last_rxc'] = (string) $rxc;
         $meta['last_txc'] = (string) $txc;
-        $res = record_sample_tx($db, $rx, $tx, $now, $meta);
+        $res = record_sample_tx($db, $rx, $tx, $now, $meta, $cover, $ratePeak);
         $db->exec('COMMIT');
         return $res;
     } catch (Throwable $e) {
@@ -184,6 +231,35 @@ function recorder_housekeeping(PDO $db, int $now): void
     $db->prepare('DELETE FROM samples WHERE ts < ?')->execute([$now - $days * 86400]);
     $db->prepare('DELETE FROM login_attempts WHERE last < ?')->execute([$now - 86400]);
     meta_set($db, 'last_prune', $today);
+}
+
+/**
+ * Đọc uptime router gửi lên (giây). Chấp nhận các dạng RouterOS in ra như
+ * "1w2d03:04:05", "03:04:05.120", "2d3h4m5s", "4m5s200ms" hoặc số giây.
+ * Trả về null nếu không có hoặc không đọc được (khi đó bỏ qua, không báo lỗi).
+ */
+function parse_uptime($value): ?int
+{
+    if (!is_scalar($value)) {
+        return null;
+    }
+    $s = strtolower(trim((string) $value));
+    if ($s === '' || strlen($s) > 40) {
+        return null;
+    }
+    if (preg_match('/^\d{1,10}$/', $s)) {
+        return (int) $s;
+    }
+    if (!preg_match('/^(?:(\d+)w)?(?:(\d+)d)?(?:(\d{1,2}):(\d{1,2}):(\d{1,2})(?:\.\d+)?|(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+)s)?(?:\d+ms)?)$/', $s, $m)) {
+        return null;
+    }
+    $sec = (int) ($m[1] ?? 0) * 604800 + (int) ($m[2] ?? 0) * 86400;
+    if (isset($m[3]) && $m[3] !== '') {
+        $sec += (int) $m[3] * 3600 + (int) $m[4] * 60 + (int) $m[5];
+    } else {
+        $sec += (int) ($m[6] ?? 0) * 3600 + (int) ($m[7] ?? 0) * 60 + (int) ($m[8] ?? 0);
+    }
+    return $sec;
 }
 
 /** Đọc tham số số nguyên từ query string. Trả về null nếu không hợp lệ. */

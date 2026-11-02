@@ -73,9 +73,13 @@ không cần biến global.
 
 :local rxc [/interface get $iface rx-byte]
 :local txc [/interface get $iface tx-byte]
+:local upt [/system resource get uptime]
 
-/tool fetch url=($url . "?rxc=$rxc&txc=$txc") keep-result=no
+/tool fetch url=($url . "?rxc=$rxc&txc=$txc&up=$upt") keep-result=no
 ```
+
+Dòng `upt` (uptime của router) là tùy chọn nhưng nên có: nhờ nó server biết chính xác lúc router khởi động lại,
+nên sau khi router tắt lâu, lượng dữ liệu được ghi đúng vào khoảng thời gian router thực sự chạy.
 
 Lần gửi đầu tiên ở chế độ này chỉ ghi mốc bộ đếm (0 byte), từ lần sau số liệu được tính bình thường.
 **Chỉ chạy một trong hai script.** Trang *Quản trị › Router MikroTik* hiển thị sẵn cả hai script với
@@ -97,6 +101,7 @@ Chu kỳ nào cũng được (30 giây, 1 phút, 5 phút…), trang tự nhận 
 |---|---|
 | `rx`, `tx` | Byte download/upload phát sinh kể từ lần gửi trước (script cũ) |
 | `rxc`, `txc` | Bộ đếm `rx-byte`/`tx-byte` hiện tại của interface (script cải tiến) |
+| `up` | Uptime của router, ví dụ `2d03:04:05` hoặc `2d3h4m5s` (tùy chọn, đi kèm `rxc`/`txc`) |
 | `key` | Khóa bảo mật — bắt buộc nếu admin đã đặt khóa |
 
 Nhận cả GET và POST. Trả về `OK` (HTTP 200) khi ghi thành công; `400` nếu tham số sai, `403` nếu sai khóa.
@@ -170,6 +175,17 @@ kiểm tra quyền ghi của thư mục `data/`.
 
 **Số liệu hơi khác Winbox?** Winbox dùng 1 KB = 1024 byte; nhà mạng thường dùng 1000.
 Chọn đơn vị trong *Quản trị › Cài đặt chung*. Tốc độ luôn tính theo bit/giây (1 Mbps = 1.000.000 bit/s).
+
+**Router tắt lâu (mất điện, rút nguồn) thì số liệu có chính xác không?** Có, với script cải tiến:
+- Trong lúc router tắt không có traffic nào đi qua nên không có gì để đếm; biểu đồ tốc độ để trống khoảng đó.
+- Khi bật lại, bộ đếm của router bắt đầu từ 0. Server tự nhận ra và tính đủ toàn bộ lượng dữ liệu từ lúc bật,
+  ghi vào đúng thời điểm router chạy lại (không rải lên những giờ router đang tắt, không bị tính sang ngày hôm trước).
+  Có gửi kèm uptime thì thời điểm này chính xác tuyệt đối; không có thì server ước lượng bằng 2 chu kỳ gửi gần nhất.
+- Chỉ mất phần phát sinh từ lần gửi cuối tới lúc tắt (tối đa 1 chu kỳ, ví dụ dưới 1 phút) vì router chưa kịp gửi
+  và bộ đếm mất khi tắt nguồn.
+- Nếu router vẫn chạy, vẫn có mạng nhưng không gửi được về hosting (hosting lỗi), lần gửi sau mang theo toàn bộ
+  phần còn thiếu và được chia đều theo thời gian vào từng giờ, tổng không mất.
+- Mất mạng (nhà mạng sự cố) cũng giống router tắt: không có traffic, khi có mạng lại số liệu được tính tiếp bình thường.
 
 **"Tốc độ hiện tại" là gì?** Là tốc độ trung bình trong chu kỳ gửi gần nhất (ví dụ 1 phút), không phải tốc độ tức thời.
 

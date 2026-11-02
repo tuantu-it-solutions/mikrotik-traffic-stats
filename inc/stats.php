@@ -85,19 +85,10 @@ function period_sum(PDO $db, int $from, int $to, int $now): array
 function typical_interval(PDO $db): int
 {
     static $cache = null;
-    if ($cache !== null) {
-        return $cache;
+    if ($cache === null) {
+        $cache = recent_interval($db);
     }
-    $durs = array_map('intval', array_column(
-        db_all($db, 'SELECT dur FROM samples WHERE dur > 0 ORDER BY id DESC LIMIT 25'),
-        'dur'
-    ));
-    if (!$durs) {
-        return $cache = 60;
-    }
-    sort($durs);
-    $median = $durs[intdiv(count($durs), 2)];
-    return $cache = max(5, min(3600, $median));
+    return $cache;
 }
 
 /** Router còn gửi dữ liệu đều không? */

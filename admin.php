@@ -102,8 +102,9 @@ function script_counter(string $url, string $iface, string $key): string
 
 :local rxc [/interface get $iface rx-byte]
 :local txc [/interface get $iface tx-byte]
+:local upt [/system resource get uptime]
 
-/tool fetch url=($url . "?rxc=$rxc&txc=$txc{KEY}") keep-result=no
+/tool fetch url=($url . "?rxc=$rxc&txc=$txc&up=$upt{KEY}") keep-result=no
 RSC;
     return strtr($tpl, ['{IFACE}' => $iface, '{URL}' => $url, '{KEY}' => $key !== '' ? '&key=' . $key : '']);
 }
@@ -232,7 +233,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                     $db->exec('DELETE FROM hourly');
                     $db->exec('DELETE FROM daily');
                     meta_delete($db, ['last_ts', 'last_rxc', 'last_txc', 'last_prune', 'last_mode', 'last_ip',
-                        'negative_ts', 'negative_count', 'counter_reset_ts']);
+                        'negative_ts', 'negative_count', 'counter_reset_ts', 'last_restart', 'last_uptime']);
                     meta_set($db, 'settings_rev', (string) time());
                     $db->exec('COMMIT');
                 } catch (PDOException $e) {
@@ -347,7 +348,9 @@ if ($needSetup || $user === null) {
 
 /* ---------- Giao diện quản trị ---------- */
 
-$meta = meta_get_many($db, ['last_ts', 'last_ip', 'last_mode', 'negative_ts', 'negative_count', 'counter_reset_ts', 'last_prune']);
+$meta = meta_get_many($db, ['last_ts', 'last_ip', 'last_mode', 'negative_ts', 'negative_count', 'counter_reset_ts',
+    'last_prune', 'last_restart', 'last_uptime']);
+$restart = $meta['last_restart'] !== null ? json_decode($meta['last_restart'], true) : null;
 $typical = typical_interval($db);
 $lastTs = $meta['last_ts'] !== null ? (int) $meta['last_ts'] : null;
 $endpoint = base_url() . 'log.php';
@@ -459,7 +462,24 @@ $tabs = [
         <?php if ((int) $meta['negative_count'] > 0): ?>
         <div class="span-2"><dt>Giá trị âm đã bỏ qua</dt><dd><?= e(fmt_num((int) $meta['negative_count'])) ?> lần, gần nhất <?= e(fmt_datetime((int) $meta['negative_ts'])) ?> <small class="muted">(bộ đếm router bị reset — nên dùng script cải tiến bên dưới)</small></dd></div>
         <?php endif; ?>
-        <?php if ($meta['counter_reset_ts']): ?>
+        <?php if ($meta['last_mode'] === 'counter'): ?>
+        <div class="span-2"><dt>Uptime router</dt><dd>
+          <?php if ((string) $meta['last_uptime'] !== '' && $lastTs): ?>
+          <?php if (is_online($lastTs, $typical, time())): ?>
+          Đã chạy liên tục <?= e(fmt_duration((int) $meta['last_uptime'] + max(0, time() - $lastTs))) ?>
+          <?php else: ?>
+          Lúc gửi lần cuối router đã chạy <?= e(fmt_duration((int) $meta['last_uptime'])) ?>
+          <?php endif; ?>
+          <small class="muted">(script có gửi uptime — số liệu sau khi router khởi động lại được ghi chính xác)</small>
+          <?php else: ?>
+          Chưa gửi <small class="muted">— thêm dòng <code>upt</code> như script cải tiến bên dưới để ghi chính xác hơn khi router khởi động lại</small>
+          <?php endif; ?>
+        </dd></div>
+        <?php endif; ?>
+        <?php if (is_array($restart) && !empty($restart['ts'])): ?>
+        <div class="span-2"><dt>Router chạy lại gần nhất</dt><dd><?= e(fmt_datetime((int) $restart['ts'])) ?>
+          <small class="muted">— <?= !empty($restart['reboot']) ? 'router khởi động lại' : 'bộ đếm chạy lại từ 0 (router khởi động lại hoặc PPPoE quay số lại)' ?><?= (int) ($restart['gap'] ?? 0) > 3 * $typical ? ', trước đó không nhận được dữ liệu trong ' . e(fmt_duration((int) $restart['gap'])) : '' ?>; đã tự xử lý.</small></dd></div>
+        <?php elseif ($meta['counter_reset_ts']): ?>
         <div class="span-2"><dt>Bộ đếm reset gần nhất</dt><dd><?= e(fmt_datetime((int) $meta['counter_reset_ts'])) ?> <small class="muted">(đã tự xử lý)</small></dd></div>
         <?php endif; ?>
       </dl>
@@ -482,7 +502,7 @@ $tabs = [
 
     <section class="card">
       <div class="card-head"><div><h2><?= icon('bolt') ?>Script cải tiến <span class="badge">khuyên dùng</span></h2>
-        <p class="card-sub">Gửi thẳng bộ đếm của interface, server tự tính chênh lệch: không mất số liệu khi PPPoE quay số lại hay router khởi động lại, gửi lỗi/gửi trùng cũng không bị đếm sai. Không cần biến global.</p></div>
+        <p class="card-sub">Gửi thẳng bộ đếm của interface, server tự tính chênh lệch: không mất số liệu khi PPPoE quay số lại hay router khởi động lại, gửi lỗi/gửi trùng cũng không bị đếm sai. Kèm uptime để sau khi router tắt lâu, lượng dữ liệu được ghi đúng vào lúc router chạy lại. Không cần biến global.</p></div>
         <div class="card-tools"><button type="button" class="btn-ghost sm" data-copy="#script-counter"><?= icon('copy') ?>Sao chép</button></div></div>
       <pre class="code" id="script-counter"><?= e(script_counter($endpoint, $iface, $s['log_key'])) ?></pre>
     </section>

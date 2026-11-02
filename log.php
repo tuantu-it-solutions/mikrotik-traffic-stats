@@ -7,8 +7,10 @@
  *    Giá trị âm (bộ đếm router bị reset) được tính là 0.
  *
  * 2) Chế độ bộ đếm - khuyên dùng (gửi thẳng rx-byte/tx-byte của interface):
- *      log.php?rxc=<rx-byte>&txc=<tx-byte>
+ *      log.php?rxc=<rx-byte>&txc=<tx-byte>[&up=<uptime router>]
  *    Server tự tính chênh lệch nên gửi lỗi/gửi trùng không làm sai số liệu.
+ *    Có thêm uptime thì sau khi router tắt lâu/khởi động lại, lượng byte được
+ *    ghi đúng vào khoảng thời gian router thực sự chạy.
  *
  * Nếu admin đặt "Khóa bảo mật" thì thêm &key=<khóa> vào URL.
  * Trả về "OK" (HTTP 200) khi ghi thành công.
@@ -56,7 +58,9 @@ try {
             log_reply(400, 'ERR invalid rxc/txc');
         }
         $meta['last_mode'] = 'counter';
-        record_counters($db, $rxc, $txc, $now, $meta);
+        // Uptime của router (tùy chọn) giúp biết chính xác lúc router khởi động lại.
+        $uptime = isset($input['up']) ? parse_uptime($input['up']) : null;
+        record_counters($db, $rxc, $txc, $now, $meta, $uptime);
     } elseif (isset($input['rx']) || isset($input['tx'])) {
         $rx = parse_int_param($input['rx'] ?? null);
         $tx = parse_int_param($input['tx'] ?? null);
